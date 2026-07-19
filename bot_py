@@ -1,0 +1,214 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
+import sqlite3
+import os
+
+TOKEN = os.getenv("BOT_TOKEN")
+
+DB = "quran_bot.db"
+
+is_open = True
+message_id = None
+chat_id = None
+
+
+def init_db():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS listeners(
+            user_id INTEGER PRIMARY KEY,
+            name TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def get_users():
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    cur.execute("SELECT name FROM listeners ORDER BY rowid")
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [x[0] for x in rows]
+
+
+def add_user(user_id, name):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    cur.execute(
+        "INSERT OR IGNORE INTO listeners(user_id,name) VALUES(?,?)",
+        (user_id, name)
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def remove_user(user_id):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    cur.execute(
+        "DELETE FROM listeners WHERE user_id=?",
+        (user_id,)
+    )
+
+    conn.commit()
+    conn.close()def build_text():
+    users = get_users()
+
+    text = "📖 قائمة التسميع\n\n"
+
+    if is_open:
+        text += "🟢 القائمة مفتوحة\n\n"
+    else:
+        text += "🔴 القائمة مغلقة\n\n"
+
+    text += f"👥 العدد: {len(users)}\n\n"
+
+    if users:
+        for i, user in enumerate(users, start=1):
+            text += f"{i}- {user}\n"
+    else:
+        text += "لا يوجد مسجلون."
+
+    return text
+
+
+def build_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📝 سجل اسمي",
+                callback_data="register"
+            ),
+            InlineKeyboardButton(
+                "❌ حذف اسمي",
+                callback_data="remove"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "✅ تم التسميع",
+                callback_data="done"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔓 فتح القائمة",
+                callback_data="open"
+            ),
+            InlineKeyboardButton(
+                "🔒 إغلاق القائمة",
+                callback_data="close"
+            )
+        ]
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+async def update_message(context):
+    global chat_id, message_id
+
+    if chat_id is None or message_id is None:
+        return
+
+    await context.bot.edit_message_text(
+        chat_id=chat_id,
+        message_id=message_id,
+        text=build_text(),
+        reply_markup=build_keyboard()
+    )async def start_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global chat_id, message_id
+
+    chat_id = update.effective_chat.id
+
+    msg = await update.message.reply_text(
+        build_text(),
+        reply_markup=build_keyboard()
+    )
+
+    message_id = msg.message_id
+
+
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global is_open
+
+    query = update.callback_query
+    await query.answer()
+
+    user = query.from_user
+
+    if query.data == "register":
+
+        if is_open:
+            add_user(
+                user.id,
+                user.full_name
+            )
+
+    elif query.data == "remove":
+
+        remove_user(user.id)
+
+    elif query.data == "done":
+
+        remove_user(user.id)
+
+    elif query.data == "open":
+
+        member = await context.bot.get_chat_member(
+            query.message.chat.id,
+            user.id
+        )
+
+        if member.status in ("administrator", "creator"):
+            is_open = True
+
+    elif query.data == "close":
+
+        member = await context.bot.get_chat_member(
+            query.message.chat.id,
+            user.id
+        )
+
+        if member.status in ("administrator", "creator"):
+            is_open = False
+
+    await update_message(context)async def main():
+
+    init_db()
+
+    app = Application.builder().token(TOKEN).build()
+
+    app.add_handler(
+        CommandHandler("list", start_list)
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(button_click)
+    )
+
+    print("Bot is running...")
+
+    await app.run_polling()
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
